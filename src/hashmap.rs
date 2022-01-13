@@ -48,6 +48,8 @@ pub struct HashMap<M: Memory, A: Allocator> {
     buckets_offset: u32,
     hasher: RandomState,
     pub own_address: u32,
+    current_address: u32,
+    current_bucket: u32,
 }
 
 impl<M: Memory, A: Allocator> HashMap<M, A> {
@@ -87,6 +89,8 @@ impl<M: Memory, A: Allocator> HashMap<M, A> {
             // We can randomize these seeds if we want to be HashDos resistant.
             hasher: RandomState::with_seeds(0, 0, 0, 0),
             own_address: hash_map_address,
+            current_address: 0,
+            current_bucket: 0,
         })
     }
 
@@ -116,6 +120,8 @@ impl<M: Memory, A: Allocator> HashMap<M, A> {
             buckets_offset,
             hasher: RandomState::with_seeds(0, 0, 0, 0),
             own_address: address,
+            current_address: 0,
+            current_bucket: 0,
         })
     }
 
@@ -250,6 +256,41 @@ impl<M: Memory, A: Allocator> HashMap<M, A> {
 
         // Key not found.
         None
+    }
+
+    fn get_entry(&mut self) -> Option<(Vec<u8>, Vec<u8>)> {
+        self.current_address = read_u32(
+            &self.memory,
+            self.own_address + self.buckets_offset + self.current_bucket * 4,
+        );
+
+        if self.current_address == 0 {
+            // Bucket is empty
+            return None;
+        }
+
+        let current_entry = Entry::load(self.current_address, &self.memory);
+        Some((current_entry.key(), current_entry.value()))
+    }
+}
+
+impl<'a, M: Memory, A: Allocator> Iterator for HashMap<M, A> {
+    type Item = (Vec<u8>, Vec<u8>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_address == 0 {
+            self.get_entry()
+        } else {
+            let current_entry = Entry::load(self.current_address, &self.memory);
+            if current_entry.header.next != 0 {
+                self.current_address = current_entry.header.next;
+                let current_entry = Entry::load(self.current_address, &self.memory);
+                Some((current_entry.key(), current_entry.value()))
+            } else {
+                self.current_bucket += 1;
+                self.get_entry()
+            }
+        }
     }
 }
 
